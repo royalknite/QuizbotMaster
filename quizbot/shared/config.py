@@ -78,6 +78,14 @@ REQUIRED_SUB_CHANNEL: str | None = _env("REQUIRED_SUB_CHANNEL")
 # ---------------------------------------------------------------------------
 FREE_BOT: bool = _env_bool("FREE_BOT", False)
 
+# Preset setup: when true, the Creator Bot asks timer / correct mark /
+# negative marking / shuffle / explanation / anti-cheat (inline buttons) while
+# a quiz is being created, and the Runner Bot then starts the quiz straight
+# away with those saved settings instead of asking them again in the group.
+# When false (default) nothing changes -- every one of those is asked in the
+# group, exactly as before.
+PRESET_SETUP: bool = _env_bool("PRESET_SETUP", False)
+
 # ---------------------------------------------------------------------------
 # Payments (Razorpay)
 # ---------------------------------------------------------------------------
