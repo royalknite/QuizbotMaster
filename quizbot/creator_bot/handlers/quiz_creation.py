@@ -234,6 +234,9 @@ async def _finalize_quiz(
     sections: list[dict],
     timer: int,
     from_user_name: str,
+    correct_marks: float = 1,
+    negative_marks: float = 0,
+    preset: Optional[dict] = None,
 ) -> None:
     """Save the in-progress quiz to the database and report the result.
     `reply_target` is either a Message (creation flow) or a CallbackQuery
@@ -269,6 +272,16 @@ async def _finalize_quiz(
 
     qid = _gen_qid()
     quiz_repo = QuizRepository(get_db())
+    extra_fields: dict = {}
+    if preset:
+        # Only reached when PRESET_SETUP is on and the creator answered the
+        # extra setup buttons; otherwise the quiz is saved exactly as before.
+        extra_fields = {
+            "correct_marks": correct_marks,
+            "shuffle_questions": bool(preset.get("shuffle_q")),
+            "shuffle_options": bool(preset.get("shuffle_o")),
+            "preset": preset,
+        }
     quiz = await quiz_repo.create(
         creator_id=uid,
         quiz_name=quiz_name,
@@ -277,8 +290,9 @@ async def _finalize_quiz(
         sections=sections,
         timer=timer,
         quiz_type=quiz_type,
-        negative_marks=0,
+        negative_marks=negative_marks if preset else 0,
         promo_message=promo,
+        **extra_fields,
     )
     state.quiz_creation.pop(uid, None)
 
@@ -287,11 +301,26 @@ async def _finalize_quiz(
         return
 
     promo_flag = "Set" if promo else "None"
+    preset_lines = ""
+    if preset:
+        shuffle_label = (
+            "Questions + Options" if preset.get("shuffle_q") and preset.get("shuffle_o")
+            else "Questions" if preset.get("shuffle_q")
+            else "Options" if preset.get("shuffle_o")
+            else "Off"
+        )
+        preset_lines = (
+            f"🎯 **Marks:** +{correct_marks:g} / -{negative_marks:g}\n"
+            f"🔀 **Shuffle:** {shuffle_label}\n"
+            f"💡 **Explanation:** {'On' if preset.get('show_explanation') else 'Off'}\n"
+            f"🛡 **Anti-cheat:** {'On' if preset.get('anti_cheat') else 'Off'}\n"
+        )
     text = (
         f"> 🎉 **Quiz Created!**\n\n"
         f"\U0001F4DD **Name:** {quiz_name}\n"
         f"❓ **Questions:** {len(quiz['questions'])}\n"
         f"⏱️ **Timer:** {timer}s\n"
+        f"{preset_lines}"
         f"🆔 **Quiz ID:** `{qid}`\n"
         f"\U0001F3F7 **Type:** `{quiz_type}`\n"
         f"🪭 **Promo:** {promo_flag}\n"
@@ -331,6 +360,164 @@ async def _finalize_quiz(
             await c.send_message(config.BOT_GROUP, announce_text, reply_markup=InlineKeyboardMarkup(kb_buttons[:3]))
         except Exception:
             logger.debug("Failed to announce new quiz in BOT_GROUP", exc_info=True)
+
+
+# ── Preset setup (only used when config.PRESET_SETUP is true) ────────────
+# After the Type step the creator picks timer / marks / negative marking /
+# shuffle / explanation / anti-cheat with inline buttons. The answers are
+# saved on the quiz, and the Runner Bot then starts it without asking again.
+
+_PRESET_KEYS = ("shuffle_q", "shuffle_o", "shuffle_o_count", "show_explanation", "anti_cheat")
+
+
+def _num(value: float):
+    """1.0 -> 1 (keeps whole numbers as int, like the stored defaults)."""
+    return int(value) if float(value).is_integer() else float(value)
+
+
+def _preset_kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in rows]
+    )
+
+
+def _preset_next(ud: dict, current: Optional[str]) -> Optional[str]:
+    """Which setup step comes after `current` (None = the first step)."""
+    if current is None:
+        # A sectioned quiz already has a timer per section.
+        return "cm" if ud.get("sections") else "tm"
+    if current == "sh":
+        return "shc" if ud["_preset"]["shuffle_o"] else "ex"
+    return {"tm": "cm", "cm": "nm", "nm": "sh", "shc": "ex", "ex": "ac", "ac": None}[current]
+
+
+def _preset_prompt(step: str, ud: dict) -> tuple[str, InlineKeyboardMarkup]:
+    if step == "tm":
+        return "⏱️ **Timer per question?**", _preset_kb([
+            [(f"{t}s", f"qc_tm_{t}") for t in (15, 20, 30)],
+            [(f"{t}s", f"qc_tm_{t}") for t in (40, 60, 90)],
+            [("⏭ Default (20s)", "qc_tm_default")],
+        ])
+    if step == "cm":
+        return "🎯 **Correct mark per question?**", _preset_kb([
+            [(str(n), f"qc_cm_{n}") for n in range(1, 6)],
+            [("⏭ Default (1)", "qc_cm_default")],
+        ])
+    if step == "nm":
+        cm = ud["_preset"]["correct_marks"]
+        return f"➖ **Negative marking?** (on correct mark {cm:g})", _preset_kb([
+            [("1/4", "qc_nm_0.25"), ("1/3", "qc_nm_0.333"), ("1/2", "qc_nm_0.5"), ("1", "qc_nm_1.0")],
+            [("⏭ None", "qc_nm_skip")],
+        ])
+    if step == "sh":
+        return "🔀 **Shuffle?**", _preset_kb([
+            [("Questions", "qc_sh_q"), ("Options", "qc_sh_o"), ("Both", "qc_sh_b")],
+            [("⏭ No shuffle", "qc_sh_skip")],
+        ])
+    if step == "shc":
+        return "🔀 **Shuffle how many options?**", _preset_kb([
+            [("First 2", "qc_shc_2"), ("First 4", "qc_shc_4"), ("All", "qc_shc_all")],
+        ])
+    if step == "ex":
+        return "💡 **Show explanation after each question?**", _preset_kb([
+            [("✅ Yes", "qc_ex_yes"), ("❌ No", "qc_ex_no")],
+        ])
+    return "🛡 **Anti-cheat detection?** (groups only)", _preset_kb([
+        [("✅ Yes", "qc_ac_yes"), ("❌ No", "qc_ac_no")],
+    ])
+
+
+async def _begin_preset_steps(c: Client, uid: int, chat_id: int, quiz_type: str, from_user_name: str) -> None:
+    """Start the extra setup questions instead of saving the quiz right away."""
+    ud = state.quiz_creation[uid]
+    ud["_preset"] = {
+        "correct_marks": 1, "negative_marks": 0,
+        "shuffle_q": False, "shuffle_o": False, "shuffle_o_count": 0,
+        "show_explanation": False, "anti_cheat": False,
+    }
+    ud["_preset_final"] = {"quiz_type": quiz_type, "name": from_user_name}
+    ud["awaiting_marks"] = True
+    step = _preset_next(ud, None)
+    ud["marks_step"] = step
+    text, kb = _preset_prompt(step, ud)
+    await c.send_message(chat_id, text, reply_markup=kb)
+
+
+async def preset_step_cb(c: Client, cb: CallbackQuery) -> None:
+    """`qc_<step>_<value>` -- one answer of the preset setup steps."""
+    uid = cb.from_user.id
+    ud = state.quiz_creation.get(uid)
+    if not ud or not ud.get("awaiting_marks"):
+        await cb.answer("⚠️ Session expired", show_alert=True)
+        return
+    _, step, value = cb.data.split("_", 2)
+    if step != ud.get("marks_step"):
+        await cb.answer()  # stale/double tap on an earlier step
+        return
+
+    p = ud["_preset"]
+    try:
+        if step == "tm":
+            if value != "default":
+                t = int(value)
+                if not 10 < t <= 600:
+                    raise ValueError
+                ud["timer"] = t
+        elif step == "cm":
+            if value == "default":
+                p["correct_marks"] = 1
+            else:
+                cm = float(value)
+                if not 0 < cm <= 10:
+                    raise ValueError
+                p["correct_marks"] = _num(cm)
+        elif step == "nm":
+            if value == "skip":
+                p["negative_marks"] = 0
+            else:
+                frac = float(value)
+                if not 0 <= frac <= 1:
+                    raise ValueError
+                p["negative_marks"] = _num(round(frac * p["correct_marks"], 4))
+        elif step == "sh":
+            p["shuffle_q"] = value in ("q", "b")
+            p["shuffle_o"] = value in ("o", "b")
+            p["shuffle_o_count"] = 0
+        elif step == "shc":
+            p["shuffle_o_count"] = 0 if value == "all" else int(value)
+        elif step == "ex":
+            p["show_explanation"] = value == "yes"
+        elif step == "ac":
+            p["anti_cheat"] = value == "yes"
+    except ValueError:
+        await cb.answer("⚠️ Invalid choice", show_alert=True)
+        return
+
+    # Update state first so a quick double-tap can't run this step twice.
+    nxt = _preset_next(ud, step)
+    ud["marks_step"] = nxt
+    if nxt is None:
+        ud.pop("awaiting_marks", None)
+
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+
+    if nxt is not None:
+        text, kb = _preset_prompt(nxt, ud)
+        await c.send_message(cb.message.chat.id, text, reply_markup=kb)
+        await cb.answer()
+        return
+
+    fin = ud["_preset_final"]
+    await _finalize_quiz(
+        c, cb, uid, fin["quiz_type"], ud.get("promo_message"), ud.get("sections", []),
+        ud.get("timer") or 20, fin["name"],
+        correct_marks=p["correct_marks"], negative_marks=p["negative_marks"],
+        preset={k: p[k] for k in _PRESET_KEYS},
+    )
+    await cb.answer()
 
 
 async def quicksave_cb(c: Client, cb: CallbackQuery) -> None:
@@ -581,7 +768,15 @@ async def handle_creation_message(c: Client, m: Message) -> None:
         sections = ud.get("sections", [])
         promo = ud.get("promo_message")
         name = m.from_user.first_name if m.from_user else str(uid)
+        if config.PRESET_SETUP:
+            ud.pop("awaiting_type", None)
+            await _begin_preset_steps(c, uid, m.chat.id, quiz_type, name)
+            return
         await _finalize_quiz(c, m, uid, quiz_type, promo, sections, timer, name)
+        return
+
+    if ud.get("awaiting_marks"):
+        await m.reply("⚠️ Please use the buttons above to continue, or /cancel.")
         return
 
     # ── Free-text question paste ──────────────────────────────────────
@@ -702,6 +897,10 @@ async def quiz_type_cb(c: Client, cb: CallbackQuery) -> None:
             await cb.message.delete()
         except Exception:
             pass
+    if config.PRESET_SETUP:
+        await _begin_preset_steps(c, uid, cb.message.chat.id, quiz_type, cb.from_user.first_name or "")
+        await cb.answer()
+        return
     await _finalize_quiz(c, cb, uid, quiz_type, promo, sections, timer, cb.from_user.first_name or "")
 
     await cb.answer()
@@ -741,6 +940,7 @@ def register(app: Client) -> None:
     app.on_callback_query(filters.regex(r"^section_quiz_(yes|no)$"))(section_quiz_cb)
     app.on_callback_query(filters.regex(r"^promo_(skip|no)$"))(promo_choice_cb)
     app.on_callback_query(filters.regex(r"^quiz_type_(free|paid)$"))(quiz_type_cb)
+    app.on_callback_query(filters.regex(r"^qc_(tm|cm|nm|sh|shc|ex|ac)_[\w.]+$"))(preset_step_cb)
     app.on_message(filters.document & filters.private & in_quiz_creation_filter())(handle_document)
     app.on_message(
         (filters.text | filters.poll)
