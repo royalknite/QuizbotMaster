@@ -165,6 +165,10 @@ class QuizRepository:
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
         }
+        # Optional creator-chosen run settings (only present when the
+        # PRESET_SETUP feature was on at creation time).
+        if kwargs.get("preset"):
+            doc["preset"] = kwargs["preset"]
         await self.col.insert_one(doc)
         return await self.get(qid)
 
@@ -176,7 +180,7 @@ class QuizRepository:
         allowed = {
             "quiz_name", "questions", "sections", "timer", "quiz_type",
             "negative_marks", "correct_marks", "shuffle_questions", "shuffle_options",
-            "edit_permissions", "promo_message", "search_indexed",
+            "edit_permissions", "promo_message", "search_indexed", "preset",
         }
         if field not in allowed:
             raise ValueError(f"Field '{field}' is not updatable")
