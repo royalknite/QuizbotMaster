@@ -608,7 +608,7 @@ def register(app: Client) -> None:
     app.on_message(filters.command("edit") & filters.private)(edit_cmd)
     app.on_message(filters.command("stopedit") & filters.private)(stopedit_cmd)
     app.on_callback_query(
-        filters.regex(r"^(?!stg_|dtc_|plan_|pay_|buy_|qd_|srch_|bat_|prev:|next:|refresh:|section_quiz_|promo_|quiz_type_)")
+        filters.regex(r"^(?!stg_|dtc_|plan_|pay_|buy_|qd_|srch_|bat_|prev:|next:|refresh:|section_quiz_|promo_|quiz_type_|qc_)")
     )(edit_tree_cb)
     app.on_message(
     ~filters.command(["create", "edit", "stopedit"]) &
