@@ -92,7 +92,7 @@ FREE_BOT: bool = _env_bool("FREE_BOT", False)
 #                    False have no saved settings, so they still use the old
 #                    group setup.)
 # ===========================================================================
-PRESET_SETUP: bool = False
+PRESET_SETUP: bool = True
 
 # ---------------------------------------------------------------------------
 # Payments (Razorpay)
