@@ -17,6 +17,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 from quizbot.database import QuizPrefsRepository, get_db
+from quizbot.shared import config
 from quizbot.shared.utils import is_premium_user
 
 from ..quiz_utils import check_batch_access, resolve_quiz_access
@@ -74,8 +75,35 @@ async def _setup_edit(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, k
         pending_quiz_settings[chat_id]["setup_msg_id"] = msg.message_id
 
 
+async def _apply_creator_preset(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
+    """PRESET_SETUP: if the creator already chose this quiz's settings in the
+    Creator Bot, apply them and start the quiz without asking again here.
+    Returns False (and does nothing) when the quiz has no saved preset."""
+    ps = pending_quiz_settings.get(chat_id)
+    if not ps:
+        return False
+    quiz = ps.get("quiz") or {}
+    preset = quiz.get("preset")
+    if not preset:
+        return False
+
+    ps["correct_mark"] = quiz.get("correct_mark", 1)
+    ps["neg_mark"] = quiz.get("negative_marking", 0)
+    ps["shuffle_q"] = bool(preset.get("shuffle_q"))
+    ps["shuffle_o"] = bool(preset.get("shuffle_o"))
+    ps["shuffle_o_count"] = int(preset.get("shuffle_o_count") or 0)
+    ps["show_explanation"] = bool(preset.get("show_explanation"))
+    ps["anti_cheat"] = bool(preset.get("anti_cheat")) and ps.get("chat_type") in ("group", "supergroup")
+    ps["timer_override"] = None  # the quiz's own saved timer is used
+    await _launch_quiz_from_settings(chat_id, ctx, ps)
+    pending_quiz_settings.pop(chat_id, None)
+    return True
+
+
 async def show_correct_mark_prompt(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
     """Step 1: correct mark per question, with a Quick Start shortcut."""
+    if config.PRESET_SETUP and await _apply_creator_preset(ctx, chat_id):
+        return
     prev = await _get_quiz_prefs(chat_id)
     has_saved = not prev.get("is_default", True)
     qs_label = "⚡ Quick Start (your last settings)" if has_saved else "⚡ Quick Start (all defaults)"
