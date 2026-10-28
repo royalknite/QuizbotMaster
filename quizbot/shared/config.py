@@ -78,13 +78,21 @@ REQUIRED_SUB_CHANNEL: str | None = _env("REQUIRED_SUB_CHANNEL")
 # ---------------------------------------------------------------------------
 FREE_BOT: bool = _env_bool("FREE_BOT", False)
 
-# Preset setup: when true, the Creator Bot asks timer / correct mark /
-# negative marking / shuffle / explanation / anti-cheat (inline buttons) while
-# a quiz is being created, and the Runner Bot then starts the quiz straight
-# away with those saved settings instead of asking them again in the group.
-# When false (default) nothing changes -- every one of those is asked in the
-# group, exactly as before.
-PRESET_SETUP: bool = _env_bool("PRESET_SETUP", False)
+# ===========================================================================
+# PRESET_SETUP  --  the on/off switch for the new "set everything in the bot"
+# feature. Change this one line, then restart the bot.
+#
+#   False (current)  OLD behaviour. Timer, marks, negative marking, shuffle,
+#                    explanation and anti-cheat are asked in the GROUP when
+#                    a quiz is started.
+#   True             NEW behaviour. The Creator Bot asks those (inline
+#                    buttons) while the quiz is being created, and the group
+#                    does NOT ask them again -- the quiz starts straight away
+#                    with the saved settings. (Quizzes created while this was
+#                    False have no saved settings, so they still use the old
+#                    group setup.)
+# ===========================================================================
+PRESET_SETUP: bool = False
 
 # ---------------------------------------------------------------------------
 # Payments (Razorpay)
